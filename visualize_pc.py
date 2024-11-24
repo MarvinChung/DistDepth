@@ -25,21 +25,27 @@ from PIL import Image
 # intHeight = 720
 
 # Hypersim camera parameters
-focalLength = 886.81
-centerX = 512.0
-centerY = 384.0 
-baseline = 0.131202
-intWidth = 1024
-intHeight = 768
+# focalLength = 886.81
+# centerX = 512.0
+# centerY = 384.0 
+# baseline = 0.131202
+# intWidth = 1024
+# intHeight = 768
 
-def correct_distance_to_depth(npyDistance):
-    npyImageplaneX = np.linspace((-0.5 * intWidth) + 0.5, (0.5 * intWidth) - 0.5, intWidth).reshape(1, intWidth).repeat(intHeight, 0).astype(np.float32)[:, :, None]
-    npyImageplaneY = np.linspace((-0.5 * intHeight) + 0.5, (0.5 * intHeight) - 0.5, intHeight).reshape(intHeight, 1).repeat(intWidth, 1).astype(np.float32)[:, :, None]
-    npyImageplaneZ = np.full([intHeight, intWidth, 1], focalLength, np.float32)
-    npyImageplane = np.concatenate([npyImageplaneX, npyImageplaneY, npyImageplaneZ], 2)
+# Scannet camera parameters
+fx = 1169.621094
+fy = 1167.105103
+centerX = 646.295044
+centerY = 489.927032
 
-    npyDepth = npyDistance / np.linalg.norm(npyImageplane, 2, 2) * focalLength
-    return npyDepth
+# def correct_distance_to_depth(npyDistance):
+#     npyImageplaneX = np.linspace((-0.5 * intWidth) + 0.5, (0.5 * intWidth) - 0.5, intWidth).reshape(1, intWidth).repeat(intHeight, 0).astype(np.float32)[:, :, None]
+#     npyImageplaneY = np.linspace((-0.5 * intHeight) + 0.5, (0.5 * intHeight) - 0.5, intHeight).reshape(intHeight, 1).repeat(intWidth, 1).astype(np.float32)[:, :, None]
+#     npyImageplaneZ = np.full([intHeight, intWidth, 1], focalLength, np.float32)
+#     npyImageplane = np.concatenate([npyImageplaneX, npyImageplaneY, npyImageplaneZ], 2)
+
+#     npyDepth = npyDistance / np.linalg.norm(npyImageplane, 2, 2) * focalLength
+#     return npyDepth
 
 def generate_pointcloud(rgb_file,depth_file,ply_file):
     """
@@ -61,8 +67,8 @@ def generate_pointcloud(rgb_file,depth_file,ply_file):
             color = rgb.getpixel((u,v))
             Z = -depth[u,v]
             if Z==0: continue
-            X = (u - centerX) * Z / focalLength
-            Y = (v - centerY) * Z / focalLength
+            X = (u - centerX) * Z / fx
+            Y = (v - centerY) * Z / fy
             points.append("%f %f %f %d %d %d 0\n"%(X,Y,Z,color[0],color[1],color[2]))
     file = open(ply_file,"w")
     file.write('''ply

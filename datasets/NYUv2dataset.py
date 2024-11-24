@@ -15,6 +15,12 @@ from .NYUv2base import NYUv2Base
 class NYUv2Dataset(NYUv2Base):
     def __init__(self, *args, **kwargs):
         super(NYUv2Dataset, self).__init__(*args, **kwargs)
+
+        # % RGB Intrinsic Parameters
+        # fx_rgb = 5.1885790117450188e+02;
+        # fy_rgb = 5.1946961112127485e+02;
+        # cx_rgb = 3.2558244941119034e+02;
+        # cy_rgb = 2.5373616633400465e+02;
         self.K = np.array([[0.8093, 0, 0.508, 0],
                            [0, 1.08125, 0.5286, 0],
                            [0, 0, 1, 0],

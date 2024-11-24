@@ -1,0 +1,1 @@
+python3 create_point_cloud.py --image_folder /home/marvin/Desktop/dataset/scannet0241/scene0241_00/exported/input --depth_folder ./results_scene0241_00 --pose_folder /home/marvin/Desktop/dataset/scannet0241/scene0241_00/exported/pose --output_file scene0241_00.ply
