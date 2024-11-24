@@ -82,10 +82,9 @@ if __name__ == "__main__":
             )
             features = encoder(input_image)
             outputs = depth_decoder(features)
-
             out = outputs[("out", 0)]
             out_resized = torch.nn.functional.interpolate(
-                out, (raw_img.shape[1], raw_img.shape[2]), mode="bilinear", align_corners=False
+                out, (480, 640), mode="bilinear", align_corners=False
             )
 
             # Convert disparity to depth

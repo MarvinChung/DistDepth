@@ -4,7 +4,7 @@ import os
 import re
 from PIL import Image
 
-# ScanNet camera intrinsic parameters
+# Original ScanNet camera intrinsic parameters
 fx = 1169.621094
 fy = 1167.105103
 centerX = 646.295044
@@ -25,40 +25,69 @@ def generate_pointcloud(rgb_file, depth_file, pose_file):
     """
     # Load RGB image
     rgb = Image.open(rgb_file).convert('RGB')
+
+    # Resize to 640x480
+    rgb = rgb.resize((640, 480), Image.BILINEAR)
+
+    # Central crop to 624x468
+    left = (640 - 624) // 2
+    upper = (480 - 468) // 2
+    right = left + 624
+    lower = upper + 468
+    rgb = rgb.crop((left, upper, right, lower))
+
     rgb_pixels = rgb.load()
 
     # Load depth data from NumPy array
     depth = np.load(depth_file)
 
-    # If necessary, flip or transpose depth to align with the RGB image
-    # Adjust these operations based on your data alignment
-    # For example:
-    # depth = depth.T
-    # depth = np.flip(depth, axis=0)
+    # Resize depth to 640x480 using nearest neighbor interpolation
+    depth = Image.fromarray(depth)
+    depth = depth.resize((640, 480), Image.NEAREST)
+
+    # Central crop depth to 624x468
+    depth = depth.crop((left, upper, right, lower))
+
+    depth_pixels = depth.load()
 
     # Load pose matrix
     pose = np.loadtxt(pose_file)
+
+    # Adjust camera intrinsic parameters due to resizing and cropping
+    scale_x = 640 / original_width  # original_width is the width of the original image
+    scale_y = 480 / original_height  # original_height is the height of the original image
+
+    # Adjust fx and fy
+    adjusted_fx = fx * scale_x
+    adjusted_fy = fy * scale_y
+
+    # Adjust centerX and centerY due to scaling
+    adjusted_centerX = centerX * scale_x
+    adjusted_centerY = centerY * scale_y
+
+    # Adjust centerX and centerY due to cropping
+    adjusted_centerX -= left
+    adjusted_centerY -= upper
 
     # Prepare point cloud data
     points = []
 
     width, height = rgb.size
-    depth_height, depth_width = depth.shape
+    depth_width, depth_height = depth.size
+
+
     # Ensure the depth and RGB images have the same dimensions
     if (width, height) != (depth_width, depth_height):
         print(f"Dimension mismatch between RGB image and depth map for {rgb_file}")
-        # Optionally resize depth to match RGB dimensions
-        # depth = cv2.resize(depth, (width, height), interpolation=cv2.INTER_NEAREST)
-        # Or adjust code accordingly
         return []
 
     for v in range(height):
         for u in range(width):
-            Z = depth[v, u]
+            Z = depth_pixels[u, v]
             if Z <= 0 or np.isinf(Z) or np.isnan(Z):
                 continue
-            X = (u - centerX) * Z / fx
-            Y = (v - centerY) * Z / fy
+            X = (u - adjusted_centerX) * Z / adjusted_fx
+            Y = (v - adjusted_centerY) * Z / adjusted_fy
             point_cam = np.array([X, Y, Z, 1.0])
 
             # Apply extrinsic matrix to transform point to world coordinates
@@ -77,7 +106,7 @@ if __name__ == '__main__':
     parser.add_argument('--depth_folder', required=True, help='Path to the folder containing depth .npy files.')
     parser.add_argument('--pose_folder', required=True, help='Path to the folder containing pose files.')
     parser.add_argument('--output_file', required=True, help='Path to save the combined point cloud PLY file.')
-    parser.add_argument('--skip_idx', default=5, type=int)
+    parser.add_argument('--stride', type=int, default=5)
 
     args = parser.parse_args()
 
@@ -123,11 +152,16 @@ if __name__ == '__main__':
         print("No matching files found across image, depth, and pose folders.")
         exit(1)
 
+    # Get original image dimensions (assuming all images have the same size)
+    sample_image_path = next(iter(image_files.values()))
+    with Image.open(sample_image_path) as img:
+        original_width, original_height = img.size
+
     all_points = []
     total_points = 0
 
     # Process files with matching indices
-    for idx in sorted(common_indices)[::args.skip_idx]:
+    for idx in sorted(common_indices)[::args.stride]:
         rgb_file = image_files[idx]
         depth_file = depth_files[idx]
         pose_file = pose_files[idx]
