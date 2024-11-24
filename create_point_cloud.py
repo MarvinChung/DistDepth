@@ -44,7 +44,6 @@ def generate_pointcloud(rgb_file, depth_file, pose_file):
 
     width, height = rgb.size
     depth_height, depth_width = depth.shape
-    breakpoint()
     # Ensure the depth and RGB images have the same dimensions
     if (width, height) != (depth_width, depth_height):
         print(f"Dimension mismatch between RGB image and depth map for {rgb_file}")

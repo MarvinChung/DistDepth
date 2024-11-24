@@ -11,6 +11,7 @@ import torch
 from networks.depth_decoder import DepthDecoder
 from networks.resnet_encoder import ResnetEncoder
 from utils import output_to_depth
+from natsort import natsorted
 
 torch.backends.cudnn.benchmark = True
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -68,7 +69,7 @@ if __name__ == "__main__":
         depth_decoder.eval()
 
         # Process each image
-        for idx, file in enumerate(files):
+        for idx, file in enumerate(natsorted(files)):
             raw_img = np.transpose(
                 cv2.imread(file, -1)[:, :, :3], (2, 0, 1)
             )
@@ -84,7 +85,7 @@ if __name__ == "__main__":
 
             out = outputs[("out", 0)]
             out_resized = torch.nn.functional.interpolate(
-                out, (raw_img.shape[0], raw_img.shape[1]), mode="bilinear", align_corners=False
+                out, (raw_img.shape[1], raw_img.shape[2]), mode="bilinear", align_corners=False
             )
 
             # Convert disparity to depth
