@@ -7,9 +7,6 @@ import rerun as rr  # Import the Rerun library
 from scipy.spatial.transform import Rotation
 from tqdm import tqdm  # Import tqdm for progress display
 
-# Initialize Rerun
-rr.init("PointCloudVisualization", spawn=True)
-
 # Original ScanNet camera intrinsic parameters
 fx = 1169.621094
 fy = 1167.105103
@@ -111,6 +108,10 @@ if __name__ == '__main__':
     pose_folder = args.pose_folder
     gt_depth_folder = args.ground_truth_depth_folder
     use_rerun = args.use_rerun
+
+    if use_rerun:
+        # Initialize Rerun
+        rr.init("PointCloudVisualization", spawn=True)
 
     # Function to extract numeric index from filename
     def extract_index(filename):
@@ -248,8 +249,9 @@ if __name__ == '__main__':
         # Update tqdm with per-image L1 loss
         t.set_postfix(l1_loss=l1_loss)
 
-        # Log the point cloud to Rerun
-        rr.log(f"points_{idx}", rr.Points3D(points, colors=colors, radii=0.02))
+        if use_rerun:
+            # Log the point cloud to Rerun
+            rr.log(f"points_{idx}", rr.Points3D(points, colors=colors, radii=0.02))
 
         all_points.extend(points)
         all_colors.extend(colors)
