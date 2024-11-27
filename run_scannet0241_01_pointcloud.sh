@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Prefix for the scene
-PREFIX="scene0241_00"
+PREFIX="scene0241_01"
 
 # Base directory for the dataset
 BASE_DIR="/home/marvin/Desktop/dataset/scannet0241"

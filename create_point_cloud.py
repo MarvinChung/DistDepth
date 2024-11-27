@@ -3,9 +3,10 @@ import numpy as np
 import os
 import re
 from PIL import Image
-import rerun as rr  # Import the Rerun library
-from scipy.spatial.transform import Rotation
 from tqdm import tqdm  # Import tqdm for progress display
+from skimage.measure import marching_cubes
+import plyfile
+from scipy.spatial.transform import Rotation
 
 # Original ScanNet camera intrinsic parameters
 fx = 1169.621094
@@ -13,23 +14,166 @@ fy = 1167.105103
 centerX = 646.295044
 centerY = 489.927032
 
+def save_ply(filename, points, colors):
+    """
+    Save point cloud data to a PLY file.
+
+    Args:
+        filename (str): Path to the output PLY file.
+        points (np.ndarray): Nx3 array of point coordinates.
+        colors (np.ndarray): Nx3 array of RGB colors.
+    """
+    with open(filename, 'w') as f:
+        f.write('ply\n')
+        f.write('format ascii 1.0\n')
+        f.write(f'element vertex {len(points)}\n')
+        f.write('property float x\n')
+        f.write('property float y\n')
+        f.write('property float z\n')
+        f.write('property uchar red\n')
+        f.write('property uchar green\n')
+        f.write('property uchar blue\n')
+        f.write('end_header\n')
+        for p, c in zip(points, colors):
+            f.write(f"{p[0]} {p[1]} {p[2]} {int(c[0])} {int(c[1])} {int(c[2])}\n")
+
+def create_volume(points, grid_size=256):
+    """
+    Create a volumetric occupancy grid from point cloud data.
+
+    Args:
+        points (np.ndarray): Nx3 array of point coordinates.
+        grid_size (int): Resolution of the volumetric grid along each axis.
+
+    Returns:
+        volume (np.ndarray): 3D occupancy grid.
+        min_coords (np.ndarray): Minimum coordinates along each axis.
+        max_coords (np.ndarray): Maximum coordinates along each axis.
+    """
+    # Remove invalid points (NaN, Inf)
+    valid_mask = np.all(np.isfinite(points), axis=1)
+    points = points[valid_mask]
+
+    # Check if there are valid points left
+    if points.shape[0] == 0:
+        print("No valid points to create volume.")
+        return None, None, None
+
+    # Compute min and max coordinates
+    min_coords = points.min(axis=0)
+    max_coords = points.max(axis=0)
+
+    # Compute grid spacing
+    grid_spacing = (max_coords - min_coords) / grid_size
+
+    # Avoid division by zero in case of zero grid spacing
+    grid_spacing[grid_spacing == 0] = 1e-6
+
+    # Initialize volume
+    volume = np.zeros((grid_size, grid_size, grid_size), dtype=np.uint8)
+
+    # Map points to grid indices
+    indices = ((points - min_coords) / grid_spacing).astype(int)
+
+    # Remove any indices with invalid values after processing
+    valid_indices_mask = (indices >= 0) & (indices < grid_size)
+    valid_indices_mask = np.all(valid_indices_mask, axis=1)
+    indices = indices[valid_indices_mask]
+
+    if indices.shape[0] == 0:
+        print("No valid indices after mapping to grid.")
+        return None, None, None
+
+    # Correct indexing order: indices for (z, y, x)
+    indices_z = indices[:, 2]
+    indices_y = indices[:, 1]
+    indices_x = indices[:, 0]
+
+    # Set occupied voxels
+    volume[indices_z, indices_y, indices_x] = 1
+
+    return volume, min_coords, max_coords
+
+def convert_volume_to_mesh(volume, min_coords, max_coords, output_filename, level=0.5):
+    """
+    Convert a volumetric occupancy grid to a mesh and save it as a PLY file.
+
+    Args:
+        volume (np.ndarray): 3D occupancy grid.
+        min_coords (np.ndarray): Minimum coordinates along each axis.
+        max_coords (np.ndarray): Maximum coordinates along each axis.
+        output_filename (str): Path to save the mesh PLY file.
+        level (float): The value of the iso-surface to extract.
+    """
+    # Compute voxel size
+    voxel_size = (max_coords - min_coords) / np.array(volume.shape)
+
+    # Apply Marching Cubes
+    verts, faces, normals, values = marching_cubes(
+        volume, level=level, spacing=voxel_size, allow_degenerate=True
+    )
+
+    # Invert face orientation if necessary
+    faces = faces[:, ::-1]
+
+    # Reorder axes from (z, y, x) to (x, y, z)
+    # Since verts are in (z, y, x) order, we map them to (x, y, z) for consistency
+    mesh_points = np.zeros_like(verts)
+    mesh_points[:, 0] = verts[:, 2]  # x-coordinate
+    mesh_points[:, 1] = verts[:, 1]  # y-coordinate
+    mesh_points[:, 2] = verts[:, 0]  # z-coordinate
+
+    # Map back to world coordinates
+    mesh_points += min_coords
+
+    # Prepare vertex data for PLY
+    num_verts = mesh_points.shape[0]
+    verts_tuple = np.zeros(
+        (num_verts,),
+        dtype=[("x", "f4"), ("y", "f4"), ("z", "f4")]
+    )
+    for i in range(num_verts):
+        verts_tuple[i] = tuple(mesh_points[i, :])
+
+    # Prepare face data for PLY
+    num_faces = faces.shape[0]
+    faces_building = []
+    for i in range(num_faces):
+        faces_building.append(((faces[i, :].tolist(),)))
+    faces_tuple = np.array(
+        faces_building,
+        dtype=[("vertex_indices", "i4", (3,))]
+    )
+
+    # Write to PLY using plyfile
+    el_verts = plyfile.PlyElement.describe(verts_tuple, "vertex")
+    el_faces = plyfile.PlyElement.describe(faces_tuple, "face")
+
+    ply_data = plyfile.PlyData([el_verts, el_faces])
+    print(f"Saving mesh to {output_filename}")
+    ply_data.write(output_filename)
+
+
 def generate_pointcloud(rgb, depth_data, pose_file, idx, adjusted_fx, adjusted_fy, adjusted_centerX, adjusted_centerY, use_rerun):
     """
     Generate points from an RGB image, a depth array, and a pose matrix,
     applying the extrinsic pose matrix.
 
     Inputs:
-    rgb -- numpy array of RGB image (already resized and cropped)
-    depth_data -- numpy array of depth data (already resized and cropped)
-    pose_file -- filename of the pose (extrinsic) matrix
-    idx -- index of the current frame (needed for logging)
-    adjusted_fx, adjusted_fy -- adjusted focal lengths after resizing
-    adjusted_centerX, adjusted_centerY -- adjusted principal point after resizing and cropping
+        rgb (np.ndarray): RGB image array (already resized and cropped).
+        depth_data (np.ndarray): Depth data array (already resized and cropped).
+        pose_file (str): Filename of the pose (extrinsic) matrix.
+        idx (int): Index of the current frame (needed for logging).
+        adjusted_fx (float): Adjusted focal length fx after resizing.
+        adjusted_fy (float): Adjusted focal length fy after resizing.
+        adjusted_centerX (float): Adjusted principal point X after resizing and cropping.
+        adjusted_centerY (float): Adjusted principal point Y after resizing and cropping.
+        use_rerun (bool): Flag to indicate whether to use Rerun for visualization.
 
     Returns:
-    points -- NumPy array of point coordinates
-    colors -- NumPy array of RGB colors
-    pose -- the pose matrix
+        points (np.ndarray): Nx3 array of point coordinates.
+        colors (np.ndarray): Nx3 array of RGB colors.
+        pose (np.ndarray): 4x4 pose matrix.
     """
     # Load pose matrix
     pose = np.loadtxt(pose_file)
@@ -61,6 +205,7 @@ def generate_pointcloud(rgb, depth_data, pose_file, idx, adjusted_fx, adjusted_f
     colors = np.array(colors)
 
     if use_rerun:
+        import rerun as rr  # Import Rerun library
         # Log the camera position
         keyframe_entry = f"frame_{idx}/camera_position"
         rr.log(
@@ -87,19 +232,34 @@ def generate_pointcloud(rgb, depth_data, pose_file, idx, adjusted_fx, adjusted_f
             )
         )
 
+        # Log the point cloud to Rerun
+        rr.log(f"points_{idx}", rr.Points3D(points, colors=colors, radii=0.02))
+
     return points, colors, pose
 
+def generate_mesh(all_points, grid_size, mesh_output_filename):
+    all_points_np = np.array(all_points)
+
+    # Create volumetric grid
+    volume, min_coords, max_coords = create_volume(all_points_np, grid_size=grid_size)
+
+    # Convert volume to mesh and save using plyfile
+    convert_volume_to_mesh(volume, min_coords, max_coords, mesh_output_filename, level=0.5)
+    print(f"Mesh saved to {mesh_output_filename}")
+
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Visualize camera positions and point clouds incrementally using Rerun.")
+    parser = argparse.ArgumentParser(description="Visualize camera positions and point clouds incrementally.")
     parser.add_argument('--image_folder', required=True, help='Path to the folder containing RGB images.')
     parser.add_argument('--depth_folder', required=True, help='Path to the folder containing predicted depth .npy files.')
     parser.add_argument('--pose_folder', required=True, help='Path to the folder containing pose files.')
     parser.add_argument('--ground_truth_depth_folder', required=True, help='Path to the folder containing ground truth depth .png files.')
     parser.add_argument('--ground_truth_depth_scale', type=float, required=True, help='The depth scale of the ground truth depth .png files.')
-    parser.add_argument('--output_file', required=True, help='Path to save the combined point cloud PLY file.')
+    parser.add_argument('--output_folder', type=str, default="output", help='folder saved all output files')
+    parser.add_argument('--output_file_prefix', required=True, help='Prefix for output files (point clouds and mesh).')
     parser.add_argument('--stride', type=int, default=5, help='Stride for selecting frames.')
+    parser.add_argument('--grid_size', type=int, default=256, help='Resolution for each axis of volume for marching cubes.')
     parser.add_argument('--use_ground_truth_depth', action='store_true', help='Use ground truth depth to generate point cloud.')
-    parser.add_argument('--use_rerun', action='store_true', help='Use rerun to visualize point cloud.')
+    parser.add_argument('--use_rerun', action='store_true', help='Use Rerun to visualize point cloud.')
 
     args = parser.parse_args()
 
@@ -109,7 +269,11 @@ if __name__ == '__main__':
     gt_depth_folder = args.ground_truth_depth_folder
     use_rerun = args.use_rerun
 
+    os.makedirs(args.output_folder, exist_ok=True)
+    output_prefix_path = os.path.join(args.output_folder, args.output_file_prefix)
+
     if use_rerun:
+        import rerun as rr  # Import Rerun library
         # Initialize Rerun
         rr.init("PointCloudVisualization", spawn=True)
 
@@ -170,10 +334,6 @@ if __name__ == '__main__':
     adjusted_fx = fx * scale_x
     adjusted_fy = fy * scale_y
 
-    # Adjust centerX and centerY due to scaling
-    adjusted_centerX = centerX * scale_x
-    adjusted_centerY = centerY * scale_y
-
     # Define cropping parameters (central crop to 624x468)
     crop_width = 624
     crop_height = 468
@@ -181,6 +341,10 @@ if __name__ == '__main__':
     upper = (480 - crop_height) // 2
     right = left + crop_width
     lower = upper + crop_height
+
+    # Adjust centerX and centerY due to scaling
+    adjusted_centerX = centerX * scale_x
+    adjusted_centerY = centerY * scale_y
 
     # Adjust centerX and centerY due to cropping
     adjusted_centerX -= left
@@ -196,7 +360,7 @@ if __name__ == '__main__':
     t = tqdm(sorted(common_indices)[::args.stride], desc='Processing', unit='frame')
 
     # Process files with matching indices
-    for idx in t:
+    for ct, idx in enumerate(t):
         rgb_file = image_files[idx]
         depth_file = depth_files[idx]
         pose_file = pose_files[idx]
@@ -249,39 +413,27 @@ if __name__ == '__main__':
         # Update tqdm with per-image L1 loss
         t.set_postfix(l1_loss=l1_loss)
 
-        if use_rerun:
-            # Log the point cloud to Rerun
-            rr.log(f"points_{idx}", rr.Points3D(points, colors=colors, radii=0.02))
-
         all_points.extend(points)
         all_colors.extend(colors)
         total_points += len(points)
 
-    # Write all points to a single PLY file
-    with open(args.output_file, "w") as file:
-        file.write('''ply
-format ascii 1.0
-element vertex %d
-property float x
-property float y
-property float z
-property uchar red
-property uchar green
-property uchar blue
-property uchar alpha
-end_header
-''' % total_points)
+        # Save point cloud for the first image
+        if ct % 50 == 0:
+            first_ply_filename = output_prefix_path + f"_{idx}_point_cloud.ply"
+            save_ply(first_ply_filename, points, colors)
+            print(f"Point cloud for the first frame saved to {first_ply_filename}")
+            mesh_output_filename = output_prefix_path + f"_{idx}_mesh.ply"
+            generate_mesh(all_points, args.grid_size, mesh_output_filename)
 
-        for point, color in zip(all_points, all_colors):
-            file.write("%f %f %f %d %d %d 0\n" % (
-                point[0], point[1], point[2],
-                color[0], color[1], color[2]
-            ))
-
-    print(f"Combined point cloud saved to {args.output_file}")
 
     # Compute average L1 loss
     average_l1_loss = np.nanmean(l1_losses)
     print(f"Average L1 Depth Loss: {average_l1_loss:.4f} meters")
+
+    # Generate and save mesh using Marching Cubes
+    print("Generating mesh using Marching Cubes...")
+
+    mesh_output_filename =  output_prefix_path + "_mesh.ply"
+    generate_mesh(all_points, args.grid_size, mesh_output_filename)
 
     print("Visualization complete.")
