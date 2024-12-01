@@ -26,4 +26,5 @@ python3 create_point_cloud.py \
   --output_file_prefix "$OUTPUT_FILE_PREFIX" \
   --ground_truth_depth_folder "$GROUND_TRUTH_DEPTH_FOLDER" \
   --ground_truth_depth_scale "$GROUND_TRUTH_DEPTH_SCALE" \
-  --use_ground_truth_depth 
+  --use_ground_truth_depth \
+  --use_rerun

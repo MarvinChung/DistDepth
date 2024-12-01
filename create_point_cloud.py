@@ -7,6 +7,7 @@ from tqdm import tqdm  # Import tqdm for progress display
 from skimage.measure import marching_cubes
 import plyfile
 from scipy.spatial.transform import Rotation
+import trimesh
 
 # Original ScanNet camera intrinsic parameters
 fx = 1169.621094
@@ -84,80 +85,145 @@ def create_volume(points, grid_size=256):
         print("No valid indices after mapping to grid.")
         return None, None, None
 
-    # Correct indexing order: indices for (z, y, x)
-    indices_z = indices[:, 2]
-    indices_y = indices[:, 1]
     indices_x = indices[:, 0]
+    indices_y = indices[:, 1]
+    indices_z = indices[:, 2]
 
     # Set occupied voxels
-    volume[indices_z, indices_y, indices_x] = 1
+    volume[indices_x, indices_y, indices_z] = 1
 
     return volume, min_coords, max_coords
 
-def convert_volume_to_mesh(volume, min_coords, max_coords, output_filename, level=0.5):
+def create_default_material_file(material_file_path):
     """
-    Convert a volumetric occupancy grid to a mesh and save it as a PLY file.
+    Creates a default material file if it does not exist.
+
+    Args:
+        material_file_path (str): Path to the .mtl file to create.
+    """
+    if not os.path.exists(material_file_path):
+        default_material_content = """# default.mtl
+newmtl default
+Ka 1.000 1.000 1.000
+Kd 0.800 0.800 0.800
+Ks 0.000 0.000 0.000
+d 1.0
+illum 2
+"""
+        with open(material_file_path, 'w') as f:
+            f.write(default_material_content)
+        print(f"Material file created: {material_file_path}")
+    else:
+        print(f"Material file already exists: {material_file_path}")
+
+
+# def convert_volume_to_mesh_obj_with_material(volume, min_coords, max_coords, output_filename, material_name="default", level=0.5):
+#     """
+#     Convert a volumetric occupancy grid to a mesh and save it as an OBJ file with a material.
+
+#     Args:
+#         volume (np.ndarray): 3D occupancy grid.
+#         min_coords (np.ndarray): Minimum coordinates along each axis.
+#         max_coords (np.ndarray): Maximum coordinates along each axis.
+#         output_filename (str): Path to save the mesh OBJ file.
+#         material_name (str): Name of the material to include in the OBJ file.
+#         level (float): The value of the iso-surface to extract.
+#     """
+#     # Compute voxel size
+#     voxel_size = (max_coords - min_coords) / np.array(volume.shape)
+
+#     # Apply Marching Cubes
+#     verts, faces, normals, _ = marching_cubes(
+#         volume, level=level, spacing=voxel_size, allow_degenerate=True
+#     )
+
+#     # Map vertices back to world coordinates
+#     verts += min_coords
+
+#     # Create a Trimesh object
+#     mesh = trimesh.Trimesh(vertices=verts, faces=faces, vertex_normals=normals)
+
+#     # Add material information
+#     obj_data = trimesh.exchange.obj.export_obj(mesh, include_color=False)
+
+#     # Add material references to the OBJ file
+#     obj_data = f"mtllib {material_name}.mtl\nusemtl {material_name}\n" + obj_data
+
+#     # Save the OBJ file
+#     with open(output_filename, "w") as f:
+#         f.write(obj_data)
+
+#     print(f"Mesh saved to {output_filename} with material '{material_name}'")
+
+def convert_volume_to_mesh_obj_with_uv(
+    volume, min_coords, max_coords, output_filename, material_name="default", level=0.5
+):
+    """
+    Convert a volumetric occupancy grid to a mesh, apply transformations, and save it as an OBJ file with UV coordinates.
 
     Args:
         volume (np.ndarray): 3D occupancy grid.
         min_coords (np.ndarray): Minimum coordinates along each axis.
         max_coords (np.ndarray): Maximum coordinates along each axis.
-        output_filename (str): Path to save the mesh PLY file.
+        output_filename (str): Path to save the mesh OBJ file.
+        material_name (str): Name of the material to use.
         level (float): The value of the iso-surface to extract.
     """
     # Compute voxel size
     voxel_size = (max_coords - min_coords) / np.array(volume.shape)
 
     # Apply Marching Cubes
-    verts, faces, normals, values = marching_cubes(
+    verts, faces, normals, _ = marching_cubes(
         volume, level=level, spacing=voxel_size, allow_degenerate=True
     )
 
-    # Invert face orientation if necessary
-    faces = faces[:, ::-1]
-
-    # Reorder axes from (z, y, x) to (x, y, z)
-    # Since verts are in (z, y, x) order, we map them to (x, y, z) for consistency
-    mesh_points = np.zeros_like(verts)
-    mesh_points[:, 0] = verts[:, 2]  # x-coordinate
-    mesh_points[:, 1] = verts[:, 1]  # y-coordinate
-    mesh_points[:, 2] = verts[:, 0]  # z-coordinate
+    # 90-degree clockwise rotation about the z-axis
+    rotation_z = np.array([[1, 0, 0], [0, 0, 1], [0, -1, 0]])  
+    verts = verts @ rotation_z.T
+    normals = normals @ rotation_z.T
 
     # Map back to world coordinates
-    mesh_points += min_coords
+    verts += min_coords
 
-    # Prepare vertex data for PLY
-    num_verts = mesh_points.shape[0]
-    verts_tuple = np.zeros(
-        (num_verts,),
-        dtype=[("x", "f4"), ("y", "f4"), ("z", "f4")]
-    )
-    for i in range(num_verts):
-        verts_tuple[i] = tuple(mesh_points[i, :])
+    # Generate UV coordinates (simple planar projection)
+    uv_coords = np.zeros((verts.shape[0], 2))
+    uv_coords[:, 0] = (verts[:, 0] - min_coords[0]) / (max_coords[0] - min_coords[0])  # U
+    uv_coords[:, 1] = (verts[:, 1] - min_coords[1]) / (max_coords[1] - min_coords[1])  # V
 
-    # Prepare face data for PLY
-    num_faces = faces.shape[0]
-    faces_building = []
-    for i in range(num_faces):
-        faces_building.append(((faces[i, :].tolist(),)))
-    faces_tuple = np.array(
-        faces_building,
-        dtype=[("vertex_indices", "i4", (3,))]
-    )
+    # Write OBJ file
+    with open(output_filename, 'w') as f:
+        f.write(f"mtllib {material_name}.mtl\n")
+        f.write(f"usemtl {material_name}\n")
 
-    # Write to PLY using plyfile
-    el_verts = plyfile.PlyElement.describe(verts_tuple, "vertex")
-    el_faces = plyfile.PlyElement.describe(faces_tuple, "face")
+        # Write vertices
+        for vert in verts:
+            f.write(f"v {vert[0]:.6f} {vert[1]:.6f} {vert[2]:.6f}\n")
 
-    ply_data = plyfile.PlyData([el_verts, el_faces])
-    print(f"Saving mesh to {output_filename}")
-    ply_data.write(output_filename)
+        # Write normals
+        for normal in normals:
+            f.write(f"vn {normal[0]:.6f} {normal[1]:.6f} {normal[2]:.6f}\n")
+
+        # Write texture coordinates
+        for uv in uv_coords:
+            f.write(f"vt {uv[0]:.6f} {uv[1]:.6f}\n")
+
+        # Write faces
+        for face in faces:
+            v1, v2, v3 = face + 1  # OBJ format indices are 1-based
+            f.write(f"f {v1}/{v1}/{v1} {v2}/{v2}/{v2} {v3}/{v3}/{v3}\n")
+
+    print(f"Transformed OBJ file with UV coordinates saved to {output_filename}")
 
 
-def generate_pointcloud(rgb, depth_data, pose_file, idx, adjusted_fx, adjusted_fy, adjusted_centerX, adjusted_centerY, use_rerun):
+import numpy as np
+
+def generate_pointcloud(
+    rgb, depth_data, pose_file, idx, adjusted_fx, adjusted_fy,
+    adjusted_centerX, adjusted_centerY, use_rerun, downsample_factor=10
+):
     """
     Generate points from an RGB image, a depth array, and a pose matrix,
-    applying the extrinsic pose matrix.
+    applying the extrinsic pose matrix. Includes point cloud downsampling.
 
     Inputs:
         rgb (np.ndarray): RGB image array (already resized and cropped).
@@ -169,13 +235,14 @@ def generate_pointcloud(rgb, depth_data, pose_file, idx, adjusted_fx, adjusted_f
         adjusted_centerX (float): Adjusted principal point X after resizing and cropping.
         adjusted_centerY (float): Adjusted principal point Y after resizing and cropping.
         use_rerun (bool): Flag to indicate whether to use Rerun for visualization.
+        downsample_factor (int): Factor by which to downsample the point cloud.
 
     Returns:
-        points (np.ndarray): Nx3 array of point coordinates.
-        colors (np.ndarray): Nx3 array of RGB colors.
+        points (np.ndarray): Nx3 array of point coordinates (downsampled).
+        colors (np.ndarray): Nx3 array of RGB colors (downsampled).
         pose (np.ndarray): 4x4 pose matrix.
     """
-    # Load pose matrix
+    # Load pose matrix (c2w)
     pose = np.loadtxt(pose_file)
 
     # Prepare point cloud data
@@ -185,8 +252,8 @@ def generate_pointcloud(rgb, depth_data, pose_file, idx, adjusted_fx, adjusted_f
     height, width = depth_data.shape
 
     # Generate point cloud
-    for v in range(height):
-        for u in range(width):
+    for v in range(0, height, downsample_factor):  # Downsample by skipping rows
+        for u in range(0, width, downsample_factor):  # Downsample by skipping columns
             Z = depth_data[v, u]
             if Z <= 0 or np.isinf(Z) or np.isnan(Z):
                 continue
@@ -194,7 +261,7 @@ def generate_pointcloud(rgb, depth_data, pose_file, idx, adjusted_fx, adjusted_f
             Y = (v - adjusted_centerY) * Z / adjusted_fy
             point_cam = np.array([X, Y, Z, 1.0])
 
-            # Apply extrinsic matrix to transform point to world coordinates
+            # Apply c2w to transform point to world coordinates
             point_world = pose @ point_cam
 
             color = rgb[v, u, :]  # Access RGB values
@@ -204,8 +271,7 @@ def generate_pointcloud(rgb, depth_data, pose_file, idx, adjusted_fx, adjusted_f
     points = np.array(points)
     colors = np.array(colors)
 
-    if use_rerun:
-        import rerun as rr  # Import Rerun library
+    if use_rerun and idx % 50 == 0:
         # Log the camera position
         keyframe_entry = f"frame_{idx}/camera_position"
         rr.log(
@@ -237,15 +303,15 @@ def generate_pointcloud(rgb, depth_data, pose_file, idx, adjusted_fx, adjusted_f
 
     return points, colors, pose
 
-def generate_mesh(all_points, grid_size, mesh_output_filename):
+
+def generate_mesh(all_points, grid_size, mesh_output_filename, material_name):
     all_points_np = np.array(all_points)
 
     # Create volumetric grid
     volume, min_coords, max_coords = create_volume(all_points_np, grid_size=grid_size)
 
     # Convert volume to mesh and save using plyfile
-    convert_volume_to_mesh(volume, min_coords, max_coords, mesh_output_filename, level=0.5)
-    print(f"Mesh saved to {mesh_output_filename}")
+    convert_volume_to_mesh_obj_with_uv(volume, min_coords, max_coords, mesh_output_filename, material_name, level=0.5)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Visualize camera positions and point clouds incrementally.")
@@ -260,6 +326,7 @@ if __name__ == '__main__':
     parser.add_argument('--grid_size', type=int, default=256, help='Resolution for each axis of volume for marching cubes.')
     parser.add_argument('--use_ground_truth_depth', action='store_true', help='Use ground truth depth to generate point cloud.')
     parser.add_argument('--use_rerun', action='store_true', help='Use Rerun to visualize point cloud.')
+    parser.add_argument('--material_name', type=str, default="default", help='Create a fake material for mesh')
 
     args = parser.parse_args()
 
@@ -271,6 +338,9 @@ if __name__ == '__main__':
 
     os.makedirs(args.output_folder, exist_ok=True)
     output_prefix_path = os.path.join(args.output_folder, args.output_file_prefix)
+
+    material_save_path = os.path.join(args.output_folder, args.material_name+".mtl")
+    create_default_material_file(material_save_path)
 
     if use_rerun:
         import rerun as rr  # Import Rerun library
@@ -418,12 +488,12 @@ if __name__ == '__main__':
         total_points += len(points)
 
         # Save point cloud for the first image
-        if ct % 50 == 0:
+        if ct % 100 == 0:
             first_ply_filename = output_prefix_path + f"_{idx}_point_cloud.ply"
             save_ply(first_ply_filename, points, colors)
-            print(f"Point cloud for the first frame saved to {first_ply_filename}")
-            mesh_output_filename = output_prefix_path + f"_{idx}_mesh.ply"
-            generate_mesh(all_points, args.grid_size, mesh_output_filename)
+            print(f"Point cloud for the {ct} frame saved to {first_ply_filename}")
+            mesh_output_filename = output_prefix_path + f"_{idx}_mesh.obj"
+            generate_mesh(all_points, args.grid_size, mesh_output_filename, args.material_name)
 
 
     # Compute average L1 loss
@@ -433,7 +503,9 @@ if __name__ == '__main__':
     # Generate and save mesh using Marching Cubes
     print("Generating mesh using Marching Cubes...")
 
-    mesh_output_filename =  output_prefix_path + "_mesh.ply"
-    generate_mesh(all_points, args.grid_size, mesh_output_filename)
+    final_ply_filename = output_prefix_path + f"_final_point_cloud.ply"
+    save_ply(final_ply_filename, all_points, all_colors)
+    mesh_output_filename =  output_prefix_path + "_mesh.obj"
+    generate_mesh(all_points, args.grid_size, mesh_output_filename, args.material_name)
 
     print("Visualization complete.")
