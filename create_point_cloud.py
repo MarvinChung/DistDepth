@@ -155,8 +155,8 @@ illum 2
 
 #     print(f"Mesh saved to {output_filename} with material '{material_name}'")
 
-def convert_volume_to_mesh_obj_with_uv(
-    volume, min_coords, max_coords, output_filename, material_name="default", level=0.5
+def convert_volume_to_mesh_with_uv(
+    volume, min_coords, max_coords, mesh_output_filename_prefix, material_name="default", level=0.5
 ):
     """
     Convert a volumetric occupancy grid to a mesh, apply transformations, and save it as an OBJ file with UV coordinates.
@@ -191,7 +191,8 @@ def convert_volume_to_mesh_obj_with_uv(
     uv_coords[:, 1] = (verts[:, 1] - min_coords[1]) / (max_coords[1] - min_coords[1])  # V
 
     # Write OBJ file
-    with open(output_filename, 'w') as f:
+    obj_filename = mesh_output_filename_prefix + '.obj'
+    with open(obj_filename, 'w') as f:
         f.write(f"mtllib {material_name}.mtl\n")
         f.write(f"usemtl {material_name}\n")
 
@@ -212,7 +213,27 @@ def convert_volume_to_mesh_obj_with_uv(
             v1, v2, v3 = face + 1  # OBJ format indices are 1-based
             f.write(f"f {v1}/{v1}/{v1} {v2}/{v2}/{v2} {v3}/{v3}/{v3}\n")
 
-    print(f"Transformed OBJ file with UV coordinates saved to {output_filename}")
+    print(f"Transformed OBJ file with UV coordinates saved to {obj_filename}")
+
+    # Save as PLY file
+    ply_filename = mesh_output_filename_prefix + ".ply"
+    ply_data = plyfile.PlyData([
+        plyfile.PlyElement.describe(
+            np.array([
+                (*verts[i], *normals[i]) for i in range(verts.shape[0])
+            ], dtype=[
+                ('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
+                ('nx', 'f4'), ('ny', 'f4'), ('nz', 'f4')
+            ]), 'vertex'
+        ),
+        plyfile.PlyElement.describe(
+            np.array([
+                ([face[0], face[1], face[2]],) for face in faces
+            ], dtype=[('vertex_indices', 'i4', (3,))]), 'face'
+        )
+    ])
+    ply_data.write(ply_filename)
+    print(f"Transformed PLY file saved to {ply_filename}")
 
 
 import numpy as np
@@ -304,14 +325,14 @@ def generate_pointcloud(
     return points, colors, pose
 
 
-def generate_mesh(all_points, grid_size, mesh_output_filename, material_name):
+def generate_mesh(all_points, grid_size, mesh_output_filename_prefix, material_name):
     all_points_np = np.array(all_points)
 
     # Create volumetric grid
     volume, min_coords, max_coords = create_volume(all_points_np, grid_size=grid_size)
 
     # Convert volume to mesh and save using plyfile
-    convert_volume_to_mesh_obj_with_uv(volume, min_coords, max_coords, mesh_output_filename, material_name, level=0.5)
+    convert_volume_to_mesh_with_uv(volume, min_coords, max_coords, mesh_output_filename_prefix, material_name, level=0.5)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Visualize camera positions and point clouds incrementally.")
@@ -327,6 +348,7 @@ if __name__ == '__main__':
     parser.add_argument('--use_ground_truth_depth', action='store_true', help='Use ground truth depth to generate point cloud.')
     parser.add_argument('--use_rerun', action='store_true', help='Use Rerun to visualize point cloud.')
     parser.add_argument('--material_name', type=str, default="default", help='Create a fake material for mesh')
+    parser.add_argument('--downsample_factor', type=int, default=10, help='Create a fake material for mesh')
 
     args = parser.parse_args()
 
@@ -465,7 +487,7 @@ if __name__ == '__main__':
         # Generate point cloud
         points, colors, pose = generate_pointcloud(
             rgb, depth_data, pose_file, idx,
-            adjusted_fx, adjusted_fy, adjusted_centerX, adjusted_centerY, use_rerun
+            adjusted_fx, adjusted_fy, adjusted_centerX, adjusted_centerY, use_rerun, downsample_factor=args.downsample_factor
         )
 
         # Compute L1 loss between predicted depth and ground truth depth
@@ -487,13 +509,23 @@ if __name__ == '__main__':
         all_colors.extend(colors)
         total_points += len(points)
 
-        # Save point cloud for the first image
-        if ct % 100 == 0:
-            first_ply_filename = output_prefix_path + f"_{idx}_point_cloud.ply"
+        if ct == 0:
+            # Save full point cloud without downsample
+            points, colors, pose = generate_pointcloud(
+                rgb, depth_data, pose_file, idx,
+                adjusted_fx, adjusted_fy, adjusted_centerX, adjusted_centerY, use_rerun, downsample_factor=1
+            )
+            first_ply_filename = output_prefix_path + f"_first_full_point_cloud.ply"
             save_ply(first_ply_filename, points, colors)
-            print(f"Point cloud for the {ct} frame saved to {first_ply_filename}")
-            mesh_output_filename = output_prefix_path + f"_{idx}_mesh.obj"
-            generate_mesh(all_points, args.grid_size, mesh_output_filename, args.material_name)
+            print(f"Full Point cloud (without downsample) for the first frame saved to {first_ply_filename}")
+
+        # Save point cloud for the every 100 to debug
+        if ct != 0 and ct % 100 == 0:
+            cur_ply_filename = output_prefix_path + f"_{idx}_point_cloud.ply"
+            save_ply(cur_ply_filename, points, colors)
+            print(f"Point cloud for the {ct} frame saved to {cur_ply_filename}")
+            mesh_output_filename_prefix = output_prefix_path + f"_{idx}_mesh"
+            generate_mesh(all_points, args.grid_size, mesh_output_filename_prefix, args.material_name)
 
 
     # Compute average L1 loss
@@ -505,7 +537,7 @@ if __name__ == '__main__':
 
     final_ply_filename = output_prefix_path + f"_final_point_cloud.ply"
     save_ply(final_ply_filename, all_points, all_colors)
-    mesh_output_filename =  output_prefix_path + "_mesh.obj"
-    generate_mesh(all_points, args.grid_size, mesh_output_filename, args.material_name)
+    mesh_output_filename_prefix =  output_prefix_path + "_mesh"
+    generate_mesh(all_points, args.grid_size, mesh_output_filename_prefix, args.material_name)
 
     print("Visualization complete.")

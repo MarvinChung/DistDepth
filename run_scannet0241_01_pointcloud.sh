@@ -15,6 +15,9 @@ GROUND_TRUTH_DEPTH_FOLDER="$BASE_DIR/$PREFIX/exported/depth"
 # Ground truth depth scale
 GROUND_TRUTH_DEPTH_SCALE=1000.0
 
+# Downsample factor
+DOWNSMAPLE_FACTOR=10
+
 # Run the Python script with the dynamic paths
 python3 create_point_cloud.py \
   --image_folder "$IMAGE_FOLDER" \
@@ -22,4 +25,5 @@ python3 create_point_cloud.py \
   --pose_folder "$POSE_FOLDER" \
   --output_file_prefix "$PREFIX" \
   --ground_truth_depth_folder "$GROUND_TRUTH_DEPTH_FOLDER" \
-  --ground_truth_depth_scale "$GROUND_TRUTH_DEPTH_SCALE"
+  --ground_truth_depth_scale "$GROUND_TRUTH_DEPTH_SCALE" \
+  --downsample_factor "$DOWNSMAPLE_FACTOR"
