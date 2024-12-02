@@ -215,25 +215,25 @@ def convert_volume_to_mesh_with_uv(
 
     print(f"Transformed OBJ file with UV coordinates saved to {obj_filename}")
 
-    # Save as PLY file
-    ply_filename = mesh_output_filename_prefix + ".ply"
-    ply_data = plyfile.PlyData([
-        plyfile.PlyElement.describe(
-            np.array([
-                (*verts[i], *normals[i]) for i in range(verts.shape[0])
-            ], dtype=[
-                ('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
-                ('nx', 'f4'), ('ny', 'f4'), ('nz', 'f4')
-            ]), 'vertex'
-        ),
-        plyfile.PlyElement.describe(
-            np.array([
-                ([face[0], face[1], face[2]],) for face in faces
-            ], dtype=[('vertex_indices', 'i4', (3,))]), 'face'
-        )
-    ])
-    ply_data.write(ply_filename)
-    print(f"Transformed PLY file saved to {ply_filename}")
+    # # Save as PLY file
+    # ply_filename = mesh_output_filename_prefix + ".ply"
+    # ply_data = plyfile.PlyData([
+    #     plyfile.PlyElement.describe(
+    #         np.array([
+    #             (*verts[i], *normals[i]) for i in range(verts.shape[0])
+    #         ], dtype=[
+    #             ('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
+    #             ('nx', 'f4'), ('ny', 'f4'), ('nz', 'f4')
+    #         ]), 'vertex'
+    #     ),
+    #     plyfile.PlyElement.describe(
+    #         np.array([
+    #             ([face[0], face[1], face[2]],) for face in faces
+    #         ], dtype=[('vertex_indices', 'i4', (3,))]), 'face'
+    #     )
+    # ])
+    # ply_data.write(ply_filename)
+    # print(f"Transformed PLY file saved to {ply_filename}")
 
 
 import numpy as np
